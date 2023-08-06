@@ -1,0 +1,162 @@
+import sys
+import re
+import Levenshtein
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QFileDialog, QProgressBar, QTextEdit
+from PyQt5.QtGui import QColor, QBrush
+from PyQt5.QtCore import Qt
+
+class TranslationComparisonTool(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle("Smarter Translation Comparison Tool")
+        self.setGeometry(100, 100, 800, 600)
+
+        self.primary_text = ""
+        self.translated_text = ""
+        self.comparison_results = []
+        self.missing_lines_count = 0
+
+        self.main_widget = QWidget()
+        self.setCentralWidget(self.main_widget)
+
+        layout = QVBoxLayout(self.main_widget)
+
+        self.label_primary = QLabel("Primary Translation")
+        layout.addWidget(self.label_primary)
+
+        self.table_widget = QTableWidget()
+        layout.addWidget(self.table_widget)
+
+        self.label_translated = QLabel("Translated Text")
+        layout.addWidget(self.label_translated)
+
+        self.load_primary_button = QPushButton("Load Primary Text")
+        self.load_primary_button.clicked.connect(self.load_primary_text)
+        layout.addWidget(self.load_primary_button)
+
+        self.load_translated_button = QPushButton("Load Translated Text")
+        self.load_translated_button.clicked.connect(self.load_translated_text)
+        layout.addWidget(self.load_translated_button)
+
+        self.compare_button = QPushButton("Compare Translations")
+        self.compare_button.clicked.connect(self.compare_translations)
+        layout.addWidget(self.compare_button)
+
+        self.save_button = QPushButton("Save Output")
+        self.save_button.clicked.connect(self.save_output)
+        self.save_button.setEnabled(False)
+        layout.addWidget(self.save_button)
+
+        self.missing_lines_counter_label = QLabel("Missing lines count: 0")
+        layout.addWidget(self.missing_lines_counter_label)
+
+        self.progress_bar = QProgressBar()
+        layout.addWidget(self.progress_bar)
+
+        layout.setAlignment(Qt.AlignTop)
+
+    def load_primary_text(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Primary Text File", "", "Text Files (*.txt);;All Files (*)")
+        if file_path:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                self.primary_text = file.read()
+
+    def load_translated_text(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Translated Text File", "", "Text Files (*.txt);;All Files (*)")
+        if file_path:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                self.translated_text = file.read()
+
+            self.compare_button.setEnabled(True)
+
+    def compare_translations(self):
+        if not self.primary_text or not self.translated_text:
+            return
+
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        
+        self.progress_bar.setValue(0)
+
+        primary_sentences = self.primary_text.split('\n')
+        translated_sentences = self.translated_text.split('\n')
+
+        # Pad the shorter list with empty strings if necessary
+        max_len = max(len(primary_sentences), len(translated_sentences))
+        primary_sentences += [''] * (max_len - len(primary_sentences))
+        translated_sentences += [''] * (max_len - len(translated_sentences))
+
+        total_sentences = max_len
+        self.progress_bar.setMaximum(total_sentences)
+
+        self.comparison_results = []
+        self.missing_lines_count = 0
+
+        vectorizer = TfidfVectorizer()
+        vectors = vectorizer.fit_transform(primary_sentences + translated_sentences)
+        primary_vectors = vectors[:total_sentences]
+        translated_vectors = vectors[total_sentences:]
+
+        similarity_matrix = cosine_similarity(primary_vectors, translated_vectors)
+
+        for i in range(total_sentences):
+            primary_sentence = primary_sentences[i]
+            translated_sentence = translated_sentences[i]
+
+            most_similar_index = similarity_matrix[i].argmax()
+            most_similar_sentence = translated_sentences[most_similar_index]
+
+            similarity = Levenshtein.distance(primary_sentence, most_similar_sentence)
+            similarity_color = self.get_similarity_color(similarity)
+
+            if not translated_sentence.strip():
+                self.missing_lines_count += 1
+
+            self.comparison_results.append((primary_sentence, translated_sentence, similarity_color))
+
+            self.progress_bar.setValue(i + 1)
+
+        self.populate_table()
+        self.missing_lines_counter_label.setText(f"Missing lines count: {self.missing_lines_count}")
+        self.save_button.setEnabled(True)
+
+    def get_similarity_color(self, similarity):
+        if similarity <= 5:
+            return QColor(0, 255, 0)  # Green
+        elif similarity <= 10:
+            return QColor(255, 255, 0)  # Yellow
+        else:
+            return QColor(255, 0, 0)  # Red
+
+    def save_output(self):
+        if not self.comparison_results:
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Comparison Output", "", "Text Files (*.txt);;All Files (*)")
+        if file_path:
+            with open(file_path, 'w', encoding='utf-8') as file:
+                for _, translated, _ in self.comparison_results:
+                    if translated.strip():
+                        file.write(f"{translated}\n")
+
+    def populate_table(self):
+        self.table_widget.clear()
+        self.table_widget.setColumnCount(3)
+        self.table_widget.setHorizontalHeaderLabels(["Primary", "Translated", "Similarity"])
+
+        for i, (primary, translated, similarity_color) in enumerate(self.comparison_results):
+            self.table_widget.insertRow(i)
+            self.table_widget.setItem(i, 0, QTableWidgetItem(primary))
+            self.table_widget.setItem(i, 1, QTableWidgetItem(translated))
+            item = QTableWidgetItem()
+            item.setBackground(QBrush(similarity_color))
+            self.table_widget.setItem(i, 2, item)
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = TranslationComparisonTool()
+    window.show()
+    sys.exit(app.exec_())
+
